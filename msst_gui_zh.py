@@ -1219,6 +1219,8 @@ class MainWindow(QMainWindow):
         if not os.path.exists(self.input_folder):
             os.makedirs(self.input_folder)
 
+        self.input_files = ""
+
         if not os.path.exists('pretrain'):
             os.makedirs('pretrain')
 
@@ -1322,16 +1324,16 @@ class MainWindow(QMainWindow):
         self.inference_env_input.setText(self.config.get("inference_env", r'.\env\python.exe'))
         self.inference_env_input.textChanged.connect(self.save_inference_env)
 
-        # Input folder selection
+        # Input files selection
         folder_layout = QHBoxLayout()
-        self.input_folder_button = QPushButton("选择输入文件夹")
-        self.input_folder_button.clicked.connect(self.select_input_folder)
-        folder_layout.addWidget(self.input_folder_button)
+        self.input_files_button = QPushButton("选择输入文件")
+        self.input_files_button.clicked.connect(self.select_files_folder)
+        folder_layout.addWidget(self.input_files_button)
 
-        self.input_folder_display = QLineEdit(self.input_folder)
-        self.input_folder_display.setReadOnly(True)
-        self.input_folder_display.setToolTip(self.input_folder)
-        folder_layout.addWidget(self.input_folder_display, 1)
+        self.input_files_display = QLineEdit()
+        self.input_files_display.setReadOnly(True)
+        self.input_files_display.setToolTip(self.input_folder)
+        folder_layout.addWidget(self.input_files_display, 1)
 
         main_layout.addLayout(folder_layout)
 
@@ -1653,18 +1655,20 @@ class MainWindow(QMainWindow):
         self.background_label.lower()
         self.setAttribute(Qt.WA_StyledBackground, True)
 
-    def select_input_folder(self):
+    def select_files_folder(self):
         logger.info("Selecting input folder")
-        folder = QFileDialog.getExistingDirectory(self, "Select Input Folder", self.input_folder)
-        if folder:
-            self.input_folder = folder
-            self.update_input_folder_display()
-            logger.info(f"Selected input folder: {folder}")
+        # folder = QFileDialog.getExistingDirectory(self, "Select Input Folder", self.input_folder)
+        files = QFileDialog.getOpenFileNames(
+            self, "选择输入文件", self.input_files, "音频文件 (*.wav *.mp3 *.flac *.m4a *.aac *.ogg);;所有文件 (*.*)")
+        if files:
+            self.input_files = ";".join(files[0])
+            self.update_input_files_display()
+            logger.info(f"Selected input files: {self.input_files}")
 
-    def update_input_folder_display(self):
-        self.input_folder_display.setText(self.input_folder)
-        self.input_folder_display.setToolTip(self.input_folder)
-        self.input_folder_display.setCursorPosition(0)
+    def update_input_files_display(self):
+        self.input_files_display.setText(self.input_files)
+        self.input_files_display.setToolTip(self.input_files)
+        self.input_files_display.setCursorPosition(0)
 
     def open_input_folder(self):
         if os.path.exists(self.input_folder):
@@ -1789,6 +1793,11 @@ class MainWindow(QMainWindow):
             logger.warning("Input folder does not exist")
             QMessageBox.warning(self, "错误", "输入文件夹不存在，请确认路径是否正确")
             return
+
+        # copy inputfiles to input folder
+        input_files = self.input_files.split(";")
+        for input_file in input_files:
+            shutil.copy(input_file, self.input_folder)
 
         if not os.listdir(self.input_folder):
             QMessageBox.warning(self, "错误",

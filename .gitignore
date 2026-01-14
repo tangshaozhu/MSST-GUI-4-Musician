@@ -6,6 +6,7 @@ __pycache__
 # Distribution / packaging
 .Python
 build/
+archive/
 develop-eggs/
 dist/
 downloads/
@@ -49,6 +50,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+*.log
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -74,3 +76,6 @@ Scripts/
 
 results/
 wandb/
+
+model_config_zh.json
+model_config_en.json
