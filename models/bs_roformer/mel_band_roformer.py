@@ -516,7 +516,8 @@ class MelBandRoformer(Module):
             self,
             raw_audio,
             target=None,
-            return_loss_breakdown=False
+            return_loss_breakdown=False,
+            target_stem_idx=None
     ):
         """
         einops
@@ -618,49 +619,72 @@ class MelBandRoformer(Module):
                 store[i] = x
 
         num_stems = len(self.mask_estimators)
-        if self.use_torch_checkpoint:
-            masks = torch.stack([checkpoint(fn, x, use_reentrant=False) for fn in self.mask_estimators], dim=1)
+
+        if target_stem_idx is not None and 0 <= target_stem_idx < num_stems:
+            if self.use_torch_checkpoint:
+                masks = checkpoint(self.mask_estimators[target_stem_idx], x, use_reentrant=False)
+            else:
+                masks = self.mask_estimators[target_stem_idx](x)
+            masks = rearrange(masks, 'b t (f c) -> b 1 f t c', c=2)
+
+            stft_repr = rearrange(stft_repr, 'b f t c -> b 1 f t c')
+
+            stft_repr = torch.view_as_complex(stft_repr)
+            masks = torch.view_as_complex(masks)
+
+            masks = masks.type(stft_repr.dtype)
+
+            scatter_indices = repeat(self.freq_indices, 'f -> b 1 f t', b=batch, t=stft_repr.shape[-1])
+
+            stft_repr_expanded = repeat(stft_repr, 'b 1 ... -> b 1 ...')
+            masks_summed = torch.zeros_like(stft_repr_expanded).scatter_add_(2, scatter_indices, masks)
+
+            denom = repeat(self.num_bands_per_freq, 'f -> (f r) 1', r=channels)
+
+            masks_averaged = masks_summed / denom.clamp(min=1e-8)
+
+            stft_repr = stft_repr * masks_averaged
+
+            stft_repr = rearrange(stft_repr, 'b 1 (f s) t -> (b s) f t', s=self.audio_channels)
+
+            recon_audio = torch.istft(stft_repr, **self.stft_kwargs, window=stft_window, return_complex=False,
+                                      length=istft_length)
+
+            recon_audio = rearrange(recon_audio, '(b s) t -> b s t', s=self.audio_channels)
         else:
-            masks = torch.stack([fn(x) for fn in self.mask_estimators], dim=1)
-        masks = rearrange(masks, 'b n t (f c) -> b n f t c', c=2)
+            if self.use_torch_checkpoint:
+                masks = torch.stack([checkpoint(fn, x, use_reentrant=False) for fn in self.mask_estimators], dim=1)
+            else:
+                masks = torch.stack([fn(x) for fn in self.mask_estimators], dim=1)
+            masks = rearrange(masks, 'b n t (f c) -> b n f t c', c=2)
 
-        # modulate frequency representation
+            stft_repr = rearrange(stft_repr, 'b f t c -> b 1 f t c')
 
-        stft_repr = rearrange(stft_repr, 'b f t c -> b 1 f t c')
+            stft_repr = torch.view_as_complex(stft_repr)
+            masks = torch.view_as_complex(masks)
 
-        # complex number multiplication
+            masks = masks.type(stft_repr.dtype)
 
-        stft_repr = torch.view_as_complex(stft_repr)
-        masks = torch.view_as_complex(masks)
+            scatter_indices = repeat(self.freq_indices, 'f -> b n f t', b=batch, n=num_stems, t=stft_repr.shape[-1])
 
-        masks = masks.type(stft_repr.dtype)
+            stft_repr_expanded_stems = repeat(stft_repr, 'b 1 ... -> b n ...', n=num_stems)
+            masks_summed = torch.zeros_like(stft_repr_expanded_stems).scatter_add_(2, scatter_indices, masks)
 
-        # need to average the estimated mask for the overlapped frequencies
+            denom = repeat(self.num_bands_per_freq, 'f -> (f r) 1', r=channels)
 
-        scatter_indices = repeat(self.freq_indices, 'f -> b n f t', b=batch, n=num_stems, t=stft_repr.shape[-1])
+            masks_averaged = masks_summed / denom.clamp(min=1e-8)
 
-        stft_repr_expanded_stems = repeat(stft_repr, 'b 1 ... -> b n ...', n=num_stems)
-        masks_summed = torch.zeros_like(stft_repr_expanded_stems).scatter_add_(2, scatter_indices, masks)
+            stft_repr = stft_repr * masks_averaged
 
-        denom = repeat(self.num_bands_per_freq, 'f -> (f r) 1', r=channels)
+            stft_repr = rearrange(stft_repr, 'b n (f s) t -> (b n s) f t', s=self.audio_channels)
 
-        masks_averaged = masks_summed / denom.clamp(min=1e-8)
+            recon_audio = torch.istft(stft_repr, **self.stft_kwargs, window=stft_window, return_complex=False,
+                                      length=istft_length)
 
-        # modulate stft repr with estimated mask
+            recon_audio = rearrange(recon_audio, '(b n s) t -> b n s t', b=batch, s=self.audio_channels, n=num_stems)
 
-        stft_repr = stft_repr * masks_averaged
-
-        # istft
-
-        stft_repr = rearrange(stft_repr, 'b n (f s) t -> (b n s) f t', s=self.audio_channels)
-
-        recon_audio = torch.istft(stft_repr, **self.stft_kwargs, window=stft_window, return_complex=False,
-                                  length=istft_length)
-
-        recon_audio = rearrange(recon_audio, '(b n s) t -> b n s t', b=batch, s=self.audio_channels, n=num_stems)
-
-        if num_stems == 1:
-            recon_audio = rearrange(recon_audio, 'b 1 s t -> b s t')
+            if num_stems == 1:
+                recon_audio = rearrange(recon_audio, 'b 1 s t -> b s t')
 
         # if a target is passed in, calculate loss for learning
 

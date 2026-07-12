@@ -511,7 +511,8 @@ class BSRoformer(Module):
             self,
             raw_audio,
             target=None,
-            return_loss_breakdown=False
+            return_loss_breakdown=False,
+            target_stem_idx=None
     ):
         """
         einops
@@ -613,40 +614,59 @@ class BSRoformer(Module):
 
         num_stems = len(self.mask_estimators)
 
-        if self.use_torch_checkpoint:
-            mask = torch.stack([checkpoint(fn, x, use_reentrant=False) for fn in self.mask_estimators], dim=1)
+        if target_stem_idx is not None and 0 <= target_stem_idx < num_stems:
+            if self.use_torch_checkpoint:
+                mask = checkpoint(self.mask_estimators[target_stem_idx], x, use_reentrant=False)
+            else:
+                mask = self.mask_estimators[target_stem_idx](x)
+            mask = rearrange(mask, 'b t (f c) -> b 1 f t c', c=2)
+
+            stft_repr = rearrange(stft_repr, 'b f t c -> b 1 f t c')
+
+            stft_repr = torch.view_as_complex(stft_repr)
+            mask = torch.view_as_complex(mask)
+
+            stft_repr = stft_repr * mask
+
+            stft_repr = rearrange(stft_repr, 'b 1 (f s) t -> (b s) f t', s=self.audio_channels)
+
+            try:
+                recon_audio = torch.istft(stft_repr, **self.stft_kwargs, window=stft_window, return_complex=False,
+                                          length=raw_audio.shape[-1])
+            except:
+                recon_audio = torch.istft(stft_repr.cpu() if x_is_mps else stft_repr, **self.stft_kwargs,
+                                          window=stft_window.cpu() if x_is_mps else stft_window, return_complex=False,
+                                          length=raw_audio.shape[-1]).to(device)
+
+            recon_audio = rearrange(recon_audio, '(b s) t -> b s t', s=self.audio_channels)
         else:
-            mask = torch.stack([fn(x) for fn in self.mask_estimators], dim=1)
-        mask = rearrange(mask, 'b n t (f c) -> b n f t c', c=2)
+            if self.use_torch_checkpoint:
+                mask = torch.stack([checkpoint(fn, x, use_reentrant=False) for fn in self.mask_estimators], dim=1)
+            else:
+                mask = torch.stack([fn(x) for fn in self.mask_estimators], dim=1)
+            mask = rearrange(mask, 'b n t (f c) -> b n f t c', c=2)
 
-        # modulate frequency representation
+            stft_repr = rearrange(stft_repr, 'b f t c -> b 1 f t c')
 
-        stft_repr = rearrange(stft_repr, 'b f t c -> b 1 f t c')
+            stft_repr = torch.view_as_complex(stft_repr)
+            mask = torch.view_as_complex(mask)
 
-        # complex number multiplication
+            stft_repr = stft_repr * mask
 
-        stft_repr = torch.view_as_complex(stft_repr)
-        mask = torch.view_as_complex(mask)
+            stft_repr = rearrange(stft_repr, 'b n (f s) t -> (b n s) f t', s=self.audio_channels)
 
-        stft_repr = stft_repr * mask
+            try:
+                recon_audio = torch.istft(stft_repr, **self.stft_kwargs, window=stft_window, return_complex=False,
+                                          length=raw_audio.shape[-1])
+            except:
+                recon_audio = torch.istft(stft_repr.cpu() if x_is_mps else stft_repr, **self.stft_kwargs,
+                                          window=stft_window.cpu() if x_is_mps else stft_window, return_complex=False,
+                                          length=raw_audio.shape[-1]).to(device)
 
-        # istft
+            recon_audio = rearrange(recon_audio, '(b n s) t -> b n s t', s=self.audio_channels, n=num_stems)
 
-        stft_repr = rearrange(stft_repr, 'b n (f s) t -> (b n s) f t', s=self.audio_channels)
-
-        # same as torch.stft() fix for MacOS MPS above
-        try:
-            recon_audio = torch.istft(stft_repr, **self.stft_kwargs, window=stft_window, return_complex=False,
-                                      length=raw_audio.shape[-1])
-        except:
-            recon_audio = torch.istft(stft_repr.cpu() if x_is_mps else stft_repr, **self.stft_kwargs,
-                                      window=stft_window.cpu() if x_is_mps else stft_window, return_complex=False,
-                                      length=raw_audio.shape[-1]).to(device)
-
-        recon_audio = rearrange(recon_audio, '(b n s) t -> b n s t', s=self.audio_channels, n=num_stems)
-
-        if num_stems == 1:
-            recon_audio = rearrange(recon_audio, 'b 1 s t -> b s t')
+            if num_stems == 1:
+                recon_audio = rearrange(recon_audio, 'b 1 s t -> b s t')
 
         # if a target is passed in, calculate loss for learning
 

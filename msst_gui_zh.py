@@ -1186,6 +1186,7 @@ class ConfigEditorDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.setAcceptDrops(True)
         self.background_label = None
         self.inference_thread = None
         self.setWindowTitle("MSST GUI v1.4     by 领航员未鸟")
@@ -1220,6 +1221,8 @@ class MainWindow(QMainWindow):
             os.makedirs(self.input_folder)
 
         self.input_files = ""
+        self.input_mode = "folder"  # "folder" or "file"
+        self.single_input_file = ""
 
         if not os.path.exists('pretrain'):
             os.makedirs('pretrain')
@@ -1324,15 +1327,22 @@ class MainWindow(QMainWindow):
         self.inference_env_input.setText(self.config.get("inference_env", r'.\env\python.exe'))
         self.inference_env_input.textChanged.connect(self.save_inference_env)
 
-        # Input files selection
+        # Input mode selection
         folder_layout = QHBoxLayout()
+
+        self.input_mode_combo = QComboBox()
+        self.input_mode_combo.addItems(["输入文件夹（批量）", "选择单个文件"])
+        self.input_mode_combo.currentIndexChanged.connect(self.on_input_mode_changed)
+        folder_layout.addWidget(self.input_mode_combo)
+
         self.input_files_button = QPushButton("选择输入文件")
         self.input_files_button.clicked.connect(self.select_files_folder)
         folder_layout.addWidget(self.input_files_button)
 
-        self.input_files_display = QLineEdit()
+        self.input_files_display = QLineEdit(self.input_folder)
         self.input_files_display.setReadOnly(True)
         self.input_files_display.setToolTip(self.input_folder)
+        self.input_files_display.setAcceptDrops(True)
         folder_layout.addWidget(self.input_files_display, 1)
 
         main_layout.addLayout(folder_layout)
@@ -1655,20 +1665,82 @@ class MainWindow(QMainWindow):
         self.background_label.lower()
         self.setAttribute(Qt.WA_StyledBackground, True)
 
+    def on_input_mode_changed(self, index):
+        if index == 0:
+            self.input_mode = "folder"
+            self.input_files_button.setText("选择输入文件")
+            self.input_files = ""
+            self.single_input_file = ""
+            self.input_files_display.setText(self.input_folder)
+            self.input_files_display.setToolTip(self.input_folder)
+        else:
+            self.input_mode = "file"
+            self.input_files_button.setText("选择单个文件")
+            self.input_files = ""
+            self.single_input_file = ""
+            self.input_files_display.setText("")
+            self.input_files_display.setToolTip("拖放音频文件到此处或点击按钮选择")
+        self.input_files_display.setCursorPosition(0)
+
     def select_files_folder(self):
-        logger.info("Selecting input folder")
-        # folder = QFileDialog.getExistingDirectory(self, "Select Input Folder", self.input_folder)
-        files = QFileDialog.getOpenFileNames(
-            self, "选择输入文件", self.input_files, "音频文件 (*.wav *.mp3 *.flac *.m4a *.aac *.ogg);;所有文件 (*.*)")
-        if files:
-            self.input_files = ";".join(files[0])
-            self.update_input_files_display()
-            logger.info(f"Selected input files: {self.input_files}")
+        logger.info("Selecting input")
+        if self.input_mode == "folder":
+            files = QFileDialog.getOpenFileNames(
+                self, "选择输入文件", self.input_files, "音频文件 (*.wav *.mp3 *.flac *.m4a *.aac *.ogg);;所有文件 (*.*)")
+            if files:
+                self.input_files = ";".join(files[0])
+                self.update_input_files_display()
+                logger.info(f"Selected input files: {self.input_files}")
+        else:
+            file = QFileDialog.getOpenFileName(
+                self, "选择单个音频文件", self.single_input_file, "音频文件 (*.wav *.mp3 *.flac *.m4a *.aac *.ogg);;所有文件 (*.*)")
+            if file and file[0]:
+                self.single_input_file = file[0]
+                self.input_files_display.setText(self.single_input_file)
+                self.input_files_display.setToolTip(self.single_input_file)
+                self.input_files_display.setCursorPosition(0)
+                logger.info(f"Selected single input file: {self.single_input_file}")
 
     def update_input_files_display(self):
         self.input_files_display.setText(self.input_files)
         self.input_files_display.setToolTip(self.input_files)
         self.input_files_display.setCursorPosition(0)
+
+    AUDIO_EXTENSIONS = {'.wav', '.mp3', '.flac', '.m4a', '.aac', '.ogg'}
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            for url in urls:
+                path = url.toLocalFile()
+                if os.path.isfile(path) and os.path.splitext(path)[1].lower() in self.AUDIO_EXTENSIONS:
+                    event.acceptProposedAction()
+                    return
+                if os.path.isdir(path):
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if not urls:
+            return
+        path = urls[0].toLocalFile()
+        if os.path.isfile(path) and os.path.splitext(path)[1].lower() in self.AUDIO_EXTENSIONS:
+            self.input_mode_combo.setCurrentIndex(1)
+            self.single_input_file = path
+            self.input_files_display.setText(path)
+            self.input_files_display.setToolTip(path)
+            self.input_files_display.setCursorPosition(0)
+            logger.info(f"Dropped single input file: {path}")
+        elif os.path.isdir(path):
+            self.input_mode_combo.setCurrentIndex(0)
+            self.input_files = ""
+            self.input_folder = path
+            self.input_files_display.setText(path)
+            self.input_files_display.setToolTip(path)
+            self.input_files_display.setCursorPosition(0)
+            logger.info(f"Dropped input folder: {path}")
 
     def open_input_folder(self):
         if os.path.exists(self.input_folder):
@@ -1789,20 +1861,35 @@ class MainWindow(QMainWindow):
         if not self.check_inference_env():
             return
 
-        if not os.path.exists(self.input_folder):
-            logger.warning("Input folder does not exist")
-            QMessageBox.warning(self, "错误", "输入文件夹不存在，请确认路径是否正确")
-            return
+        # Determine the actual input folder for inference
+        if self.input_mode == "file":
+            if not self.single_input_file or not os.path.isfile(self.single_input_file):
+                QMessageBox.warning(self, "错误", "请先选择一个有效的音频文件！")
+                return
+            single_input_folder = os.path.join(os.getcwd(), '_single_file_tmp')
+            os.makedirs(single_input_folder, exist_ok=True)
+            for f in os.listdir(single_input_folder):
+                os.remove(os.path.join(single_input_folder, f))
+            shutil.copy(self.single_input_file, single_input_folder)
+            actual_input_folder = single_input_folder
+            logger.info(f"Single file mode: copied {self.single_input_file} to {single_input_folder}")
+        else:
+            if not os.path.exists(self.input_folder):
+                logger.warning("Input folder does not exist")
+                QMessageBox.warning(self, "错误", "输入文件夹不存在，请确认路径是否正确")
+                return
 
-        # copy inputfiles to input folder
-        input_files = self.input_files.split(";")
-        for input_file in input_files:
-            shutil.copy(input_file, self.input_folder)
+            # copy inputfiles to input folder
+            input_files = self.input_files.split(";")
+            for input_file in input_files:
+                if input_file:
+                    shutil.copy(input_file, self.input_folder)
 
-        if not os.listdir(self.input_folder):
-            QMessageBox.warning(self, "错误",
-                                "输入文件夹是空的，请先添加需处理的音频文件！")
-            return
+            if not os.listdir(self.input_folder):
+                QMessageBox.warning(self, "错误",
+                                    "输入文件夹是空的，请先添加需处理的音频文件！")
+                return
+            actual_input_folder = self.input_folder
 
         is_valid, missing_items = self.validate_selected_models()
         if not is_valid:
@@ -1841,7 +1928,7 @@ class MainWindow(QMainWindow):
         force_cpu = self.force_cpu_checkbox.isChecked()
         use_tta = self.use_tta_checkbox.isChecked()
         commands = []
-        current_input_folder = self.safe_path(self.input_folder)
+        current_input_folder = self.safe_path(actual_input_folder)
 
         def add_command(model, store_dir):
             nonlocal current_input_folder
@@ -1871,7 +1958,7 @@ class MainWindow(QMainWindow):
         self.output_console.clear()
         self.update_output("启动推理.........", color='cyan')
         # self.print_separator()
-        self.inference_thread = InferenceThread(commands, self.input_folder)
+        self.inference_thread = InferenceThread(commands, actual_input_folder)
         self.inference_thread.update_signal.connect(self.process_inference_output)
         self.inference_thread.finished_signal.connect(self.inference_finished)
         self.inference_thread.file_organization_signal.connect(self.file_organization_completed)
@@ -1914,6 +2001,9 @@ class MainWindow(QMainWindow):
             self.inference_thread.wait()
             self.update_output("推理线程已由用户强制终止", color='yellow')
             self.reset_run_button()
+        single_tmp = os.path.join(os.getcwd(), '_single_file_tmp')
+        if os.path.exists(single_tmp):
+            shutil.rmtree(single_tmp, ignore_errors=True)
 
     def reset_run_button(self):
         self.run_button.setText("开始推理")
@@ -1948,6 +2038,9 @@ class MainWindow(QMainWindow):
 
     def inference_finished(self, summary):
         self.reset_run_button()
+        single_tmp = os.path.join(os.getcwd(), '_single_file_tmp')
+        if os.path.exists(single_tmp):
+            shutil.rmtree(single_tmp, ignore_errors=True)
         self.print_separator(char='=')
         self.update_output("推理完成!", color='green', bold=True)
         self.print_separator(char='=')

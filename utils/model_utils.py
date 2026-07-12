@@ -83,6 +83,13 @@ def demix(
 
     batch_size = config.inference.batch_size
 
+    target_stem_idx = None
+    if mode == 'generic':
+        target_instr = getattr(config.training, 'target_instrument', None)
+        all_instruments = config.training.instruments
+        if target_instr and target_instr in all_instruments and len(all_instruments) > 1:
+            target_stem_idx = all_instruments.index(target_instr)
+
     use_amp = getattr(config.training, 'use_amp', True)
 
     with torch.cuda.amp.autocast(enabled=use_amp):
@@ -119,7 +126,10 @@ def demix(
                 # Process batch if it's full or the end is reached
                 if len(batch_data) >= batch_size or i >= mix.shape[1]:
                     arr = torch.stack(batch_data, dim=0)
-                    x = model(arr)
+                    if target_stem_idx is not None:
+                        x = model(arr, target_stem_idx=target_stem_idx)
+                    else:
+                        x = model(arr)
 
                     if mode == "generic":
                         window = windowing_array.clone() # using clone() fixes the clicks at chunk edges when using batch_size=1

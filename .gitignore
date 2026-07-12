@@ -79,3 +79,5 @@ wandb/
 
 model_config_zh.json
 model_config_en.json
+
+*.ckpt

@@ -194,6 +194,7 @@ def parse_args_inference(dict_args: Union[Dict, None]) -> argparse.Namespace:
                         help="Flag adds test time augmentation during inference (polarity and channel inverse)."
                         "While this triples the runtime, it reduces noise and slightly improves prediction quality.")
     parser.add_argument("--lora_checkpoint", type=str, default='', help="Initial checkpoint to LoRA weights")
+    parser.add_argument("--single_file", action='store_true', help="Treat input_folder as a single file path instead of a folder")
 
     if dict_args is not None:
         args = parser.parse_args([])
